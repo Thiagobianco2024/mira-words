@@ -6,18 +6,18 @@ label{display:block;font-weight:600;margin:10px 0 6px}textarea,input{width:100%;
 textarea{min-height:110px;resize:vertical}.btns{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
 button{padding:10px 14px;border-radius:10px;border:1px solid #ccc;background:#fff;cursor:pointer}button.primary{border-color:#000}
 button.danger{border-color:#b00020;color:#b00020}.small{font-size:12px;color:#555}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
-.ok{color:#0b7;font-weight:700}.err{color:#b00020;font-weight:700}.hidden{display:none}
+.ok{color:#0b7;font-weight:700}.err{color:#b00020;font-weight:700}.warn{color:#a60;font-weight:700}.hidden{display:none}
 .pill{display:inline-block;padding:2px 8px;border:1px solid #ddd;border-radius:999px;font-size:12px;margin-left:6px}
 </style>
 <body><h1>Mira Words <span class="pill">zero storage</span></h1>
 <div class="wrap">
   <div class="card">
-    <div class="small">• Segurança real = <b>passphrase</b> (não enviar no WhatsApp). • Auto-wipe ao trocar de app/aba e por tempo. • Botão <b>PÂNICO</b> apaga tudo.</div>
+    <div class="small">• Segurança real = <b>passphrase</b> (não enviar no WhatsApp). • Auto-wipe ao trocar de app/aba e por tempo. • Botão <b>PÂNICO</b> apaga tudo. • iPhone: pode levar 1–5s pra codificar.</div>
     <label>Passphrase (não vai pro WhatsApp)</label><input id="pass" type="password" autocomplete="off" placeholder="Ex.: lagoa vento cacto marfim estrela">
+    <div id="status" class="small" style="margin-top:8px"></div>
     <label>Modo</label>
     <div class="btns"><button id="tabEnc" class="primary">Codificar</button><button id="tabDec">Decodificar</button><button id="panic" class="danger">PÂNICO</button></div>
     <div class="small" style="margin-top:10px">Auto-limpeza em <b><span id="ttlLabel">60</span>s</b><div style="margin-top:8px"><input id="ttl" type="range" min="15" max="180" value="60"></div></div>
-    <div id="status" class="small" style="margin-top:10px"></div>
   </div>
 
   <div class="card" id="encCard">
@@ -39,20 +39,30 @@ button.danger{border-color:#b00020;color:#b00020}.small{font-size:12px;color:#55
 </div>
 
 <script>
-(()=>{const $=id=>document.getElementById(id),enc=new TextEncoder(),dec=new TextDecoder(),SALT_LEN=16,IV_LEN=12,PBKDF2_ITER=310000,MAGIC="mira1",
+(()=>{const $=id=>document.getElementById(id),enc=new TextEncoder(),dec=new TextDecoder(),
+SALT_LEN=16,IV_LEN=12,MAGIC="mira1",
+PBKDF2_ITER=120000, // <- ajustado p/ iPhone (rápido e funcional)
 P=["ba","be","bi","bo","bu","ca","ce","ci","co","cu","da","de","di","do","du","fa"],
 S=["la","le","li","lo","lu","ma","me","mi","mo","mu","na","ne","ni","no","nu","ra"];
-let wipeTimer=null,wipeSeconds=parseInt($("ttl").value,10);
+let wipeTimer=null,wipeSeconds=parseInt($("ttl").value,10),busy=false;
 
-function setStatus(m,k=""){ $("status").innerHTML=m?`<span class="${k}">${String(m).replace(/[&<>"']/g,a=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[a]))}</span>`:""; }
+function esc(s){return String(s).replace(/[&<>"']/g,a=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[a]));}
+function setStatus(m,k=""){ $("status").innerHTML=m?`<span class="${k}">${esc(m)}</span>`:""; }
+function setBusy(on){
+  busy=on;
+  $("encode").disabled=on; $("decode").disabled=on; $("copyEnc").disabled=on; $("copyPlain").disabled=on;
+  if(on) setStatus("Processando… aguarde.","warn");
+}
 function resetTimer(){ if(wipeTimer)clearTimeout(wipeTimer); wipeTimer=setTimeout(()=>{hardWipe(); setStatus("Auto-limpeza executada.","ok");},wipeSeconds*1000); }
 async function clearClipboard(){ try{ await navigator.clipboard.writeText(""); }catch(_){} }
 function hardWipe(){ clearClipboard(); $("plain").value=""; $("cipherWords").value=""; $("cipherIn").value=""; $("plainOut").value=""; }
 function showEnc(){ $("encCard").classList.remove("hidden"); $("decCard").classList.add("hidden"); $("tabEnc").classList.add("primary"); $("tabDec").classList.remove("primary"); setStatus(""); resetTimer(); }
 function showDec(){ $("decCard").classList.remove("hidden"); $("encCard").classList.add("hidden"); $("tabDec").classList.add("primary"); $("tabEnc").classList.remove("primary"); setStatus(""); resetTimer(); }
+
 $("tabEnc").onclick=showEnc; $("tabDec").onclick=showDec;
 $("ttl").oninput=()=>{ wipeSeconds=parseInt($("ttl").value,10); $("ttlLabel").textContent=String(wipeSeconds); resetTimer(); };
-document.addEventListener("visibilitychange",()=>{ if(document.hidden)hardWipe(); }); window.addEventListener("blur",()=>hardWipe());
+document.addEventListener("visibilitychange",()=>{ if(document.hidden)hardWipe(); });
+window.addEventListener("blur",()=>hardWipe());
 
 function randBytes(n){const a=new Uint8Array(n); crypto.getRandomValues(a); return a;}
 async function deriveKey(pass,salt){
@@ -88,32 +98,50 @@ function unpack(t){
   return {salt,iv,ct};
 }
 
-$("panic").onclick=()=>{ $("pass").value=""; hardWipe(); setStatus("Tudo apagado.","ok"); resetTimer(); };
-$("wipeEnc").onclick=()=>{ $("plain").value=""; $("cipherWords").value=""; setStatus("Codificação apagada.","ok"); resetTimer(); };
-$("wipeDec").onclick=()=>{ $("cipherIn").value=""; $("plainOut").value=""; setStatus("Decodificação apagada.","ok"); resetTimer(); };
+$("panic").onclick=()=>{ if(busy) return; $("pass").value=""; hardWipe(); setStatus("Tudo apagado.","ok"); resetTimer(); };
+$("wipeEnc").onclick=()=>{ if(busy) return; $("plain").value=""; $("cipherWords").value=""; setStatus("Codificação apagada.","ok"); resetTimer(); };
+$("wipeDec").onclick=()=>{ if(busy) return; $("cipherIn").value=""; $("plainOut").value=""; setStatus("Decodificação apagada.","ok"); resetTimer(); };
 
 $("encode").onclick=async()=>{
+  if(busy) return;
   resetTimer(); setStatus("");
   const pass=$("pass").value||"",plain=$("plain").value||"";
   if(pass.trim().length<8) return setStatus("Passphrase curta. Use 4–6 palavras.","err");
   if(!plain.trim()) return setStatus("Digite a mensagem real.","err");
-  try{ $("cipherWords").value=pack(await encrypt(plain,pass)); setStatus("Texto-casca gerado.","ok"); }
-  catch(e){ setStatus("Falha ao codificar: "+(e?.message||String(e)),"err"); }
+  try{
+    setBusy(true);
+    // dá chance do iPhone renderizar o status antes do cálculo
+    await new Promise(r=>setTimeout(r,0));
+    $("cipherWords").value=pack(await encrypt(plain,pass));
+    setStatus("Texto-casca gerado. Copie e cole no WhatsApp.","ok");
+  }catch(e){
+    setStatus("Falha ao codificar: "+(e?.message||String(e)),"err");
+  }finally{ setBusy(false); }
 };
 
 $("decode").onclick=async()=>{
+  if(busy) return;
   resetTimer(); setStatus("");
   const pass=$("pass").value||"",cin=$("cipherIn").value||"";
   if(pass.trim().length<8) return setStatus("Passphrase curta/vazia.","err");
   if(!cin.trim()) return setStatus("Cole o texto-casca.","err");
-  try{ $("plainOut").value=await decrypt(unpack(cin),pass); setStatus("Decodificado.","ok"); }
-  catch(e){ $("plainOut").value=""; setStatus("Não decodificou (passphrase errada ou texto adulterado).","err"); }
+  try{
+    setBusy(true);
+    await new Promise(r=>setTimeout(r,0));
+    $("plainOut").value=await decrypt(unpack(cin),pass);
+    setStatus("Decodificado. Use PÂNICO ao terminar.","ok");
+  }catch(e){
+    $("plainOut").value="";
+    setStatus("Não decodificou (passphrase errada ou texto adulterado).","err");
+  }finally{ setBusy(false); }
 };
 
-$("copyEnc").onclick=async()=>{ resetTimer(); const t=$("cipherWords").value||""; if(!t.trim()) return setStatus("Nada para copiar.","err");
+$("copyEnc").onclick=async()=>{ if(busy) return; resetTimer();
+  const t=$("cipherWords").value||""; if(!t.trim()) return setStatus("Nada para copiar.","err");
   try{ await navigator.clipboard.writeText(t); setStatus("Texto-casca copiado.","ok"); }catch(_){ setStatus("Copie manualmente.","err"); }
 };
-$("copyPlain").onclick=async()=>{ resetTimer(); const t=$("plainOut").value||""; if(!t.trim()) return setStatus("Nada para copiar.","err");
+$("copyPlain").onclick=async()=>{ if(busy) return; resetTimer();
+  const t=$("plainOut").value||""; if(!t.trim()) return setStatus("Nada para copiar.","err");
   try{ await navigator.clipboard.writeText(t); setStatus("Mensagem real copiada (apague logo).","ok"); }catch(_){ setStatus("Copie manualmente.","err"); }
 };
 

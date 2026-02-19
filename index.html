@@ -1,0 +1,123 @@
+<!doctype html><html lang="pt-BR"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'self' data: blob:; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>Mira Words</title>
+<style>
+body{font-family:-apple-system,system-ui,Segoe UI,Roboto,sans-serif;margin:18px;line-height:1.35}h1{font-size:18px;margin:0 0 12px}h2{font-size:16px;margin:0 0 10px}
+.wrap{max-width:980px;display:grid;gap:12px}.card{border:1px solid #ddd;border-radius:12px;padding:14px}
+label{display:block;font-weight:600;margin:10px 0 6px}textarea,input{width:100%;box-sizing:border-box;padding:10px;border-radius:10px;border:1px solid #ccc}
+textarea{min-height:110px;resize:vertical}.btns{display:flex;flex-wrap:wrap;gap:10px;margin-top:12px}
+button{padding:10px 14px;border-radius:10px;border:1px solid #ccc;background:#fff;cursor:pointer}button.primary{border-color:#000}
+button.danger{border-color:#b00020;color:#b00020}.small{font-size:12px;color:#555}.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace}
+.ok{color:#0b7;font-weight:700}.err{color:#b00020;font-weight:700}.hidden{display:none}
+.pill{display:inline-block;padding:2px 8px;border:1px solid #ddd;border-radius:999px;font-size:12px;margin-left:6px}
+</style>
+<body><h1>Mira Words <span class="pill">zero storage</span></h1>
+<div class="wrap">
+  <div class="card">
+    <div class="small">• Segurança real = <b>passphrase</b> (não enviar no WhatsApp). • Auto-wipe ao trocar de app/aba e por tempo. • Botão <b>PÂNICO</b> apaga tudo.</div>
+    <label>Passphrase (não vai pro WhatsApp)</label><input id="pass" type="password" autocomplete="off" placeholder="Ex.: lagoa vento cacto marfim estrela">
+    <label>Modo</label>
+    <div class="btns"><button id="tabEnc" class="primary">Codificar</button><button id="tabDec">Decodificar</button><button id="panic" class="danger">PÂNICO</button></div>
+    <div class="small" style="margin-top:10px">Auto-limpeza em <b><span id="ttlLabel">60</span>s</b><div style="margin-top:8px"><input id="ttl" type="range" min="15" max="180" value="60"></div></div>
+    <div id="status" class="small" style="margin-top:10px"></div>
+  </div>
+
+  <div class="card" id="encCard">
+    <h2>Codificar</h2>
+    <label>Mensagem real</label><textarea id="plain" placeholder="Digite a mensagem real..."></textarea>
+    <div class="btns"><button id="encode" class="primary">Gerar texto-casca</button><button id="copyEnc">Copiar texto-casca</button><button id="wipeEnc" class="danger">Apagar campos</button></div>
+    <label>Texto-casca (colar no WhatsApp)</label><textarea id="cipherWords" class="mono" placeholder="Aqui aparece a sequência de palavras..."></textarea>
+    <div class="small">Envie só o texto-casca. Passphrase combinada fora do WhatsApp.</div>
+  </div>
+
+  <div class="card hidden" id="decCard">
+    <h2>Decodificar</h2>
+    <label>Texto-casca (palavras recebidas)</label><textarea id="cipherIn" class="mono" placeholder="Cole aqui a sequência de palavras..."></textarea>
+    <div class="btns"><button id="decode" class="primary">Decodificar</button><button id="wipeDec" class="danger">Apagar campos</button></div>
+    <label>Mensagem real</label><textarea id="plainOut" readonly placeholder="Mensagem decodificada..."></textarea>
+    <div class="btns"><button id="copyPlain">Copiar mensagem real</button></div>
+    <div class="small">Evite copiar se o risco for alto (clipboard). Use PÂNICO ao terminar.</div>
+  </div>
+</div>
+
+<script>
+(()=>{const $=id=>document.getElementById(id),enc=new TextEncoder(),dec=new TextDecoder(),SALT_LEN=16,IV_LEN=12,PBKDF2_ITER=310000,MAGIC="mira1",
+P=["ba","be","bi","bo","bu","ca","ce","ci","co","cu","da","de","di","do","du","fa"],
+S=["la","le","li","lo","lu","ma","me","mi","mo","mu","na","ne","ni","no","nu","ra"];
+let wipeTimer=null,wipeSeconds=parseInt($("ttl").value,10);
+
+function setStatus(m,k=""){ $("status").innerHTML=m?`<span class="${k}">${String(m).replace(/[&<>"']/g,a=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[a]))}</span>`:""; }
+function resetTimer(){ if(wipeTimer)clearTimeout(wipeTimer); wipeTimer=setTimeout(()=>{hardWipe(); setStatus("Auto-limpeza executada.","ok");},wipeSeconds*1000); }
+async function clearClipboard(){ try{ await navigator.clipboard.writeText(""); }catch(_){} }
+function hardWipe(){ clearClipboard(); $("plain").value=""; $("cipherWords").value=""; $("cipherIn").value=""; $("plainOut").value=""; }
+function showEnc(){ $("encCard").classList.remove("hidden"); $("decCard").classList.add("hidden"); $("tabEnc").classList.add("primary"); $("tabDec").classList.remove("primary"); setStatus(""); resetTimer(); }
+function showDec(){ $("decCard").classList.remove("hidden"); $("encCard").classList.add("hidden"); $("tabDec").classList.add("primary"); $("tabEnc").classList.remove("primary"); setStatus(""); resetTimer(); }
+$("tabEnc").onclick=showEnc; $("tabDec").onclick=showDec;
+$("ttl").oninput=()=>{ wipeSeconds=parseInt($("ttl").value,10); $("ttlLabel").textContent=String(wipeSeconds); resetTimer(); };
+document.addEventListener("visibilitychange",()=>{ if(document.hidden)hardWipe(); }); window.addEventListener("blur",()=>hardWipe());
+
+function randBytes(n){const a=new Uint8Array(n); crypto.getRandomValues(a); return a;}
+async function deriveKey(pass,salt){
+  const base=await crypto.subtle.importKey("raw",enc.encode(pass),"PBKDF2",false,["deriveKey"]);
+  return crypto.subtle.deriveKey({name:"PBKDF2",salt,iterations:PBKDF2_ITER,hash:"SHA-256"},base,{name:"AES-GCM",length:256},false,["encrypt","decrypt"]);
+}
+async function encrypt(plain,pass){
+  const salt=randBytes(SALT_LEN),iv=randBytes(IV_LEN),key=await deriveKey(pass,salt);
+  const ct=new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM",iv},key,enc.encode(plain)));
+  return {salt,iv,ct};
+}
+async function decrypt(p,pass){
+  const key=await deriveKey(pass,p.salt);
+  const pt=await crypto.subtle.decrypt({name:"AES-GCM",iv:p.iv},key,p.ct);
+  return dec.decode(pt);
+}
+function b2w(b){return P[(b>>4)&15]+S[b&15];}
+function w2b(w){if(!w||w.length!==4)return null; const hi=P.indexOf(w.slice(0,2)),lo=S.indexOf(w.slice(2,4)); if(hi<0||lo<0)return null; return (hi<<4)|lo;}
+function bytesToWords(bytes){return Array.from(bytes,x=>b2w(x)).join(" ");}
+function wordsToBytes(str){
+  const parts=str.trim().toLowerCase().split(/\s+/).filter(Boolean),out=new Uint8Array(parts.length);
+  for(let i=0;i<parts.length;i++){ const b=w2b(parts[i]); if(b===null)throw new Error("Token inválido: "+parts[i]); out[i]=b; }
+  return out;
+}
+function pack(p){ return `${MAGIC} ${bytesToWords(p.salt)} ${bytesToWords(p.iv)} ${bytesToWords(p.ct)}`.trim(); }
+function unpack(t){
+  const parts=t.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if(parts.length<1+SALT_LEN+IV_LEN+1) throw new Error("Texto-casca curto/inválido.");
+  if(parts[0]!==MAGIC) throw new Error("Cabeçalho inválido.");
+  const salt=wordsToBytes(parts.slice(1,1+SALT_LEN).join(" "));
+  const iv=wordsToBytes(parts.slice(1+SALT_LEN,1+SALT_LEN+IV_LEN).join(" "));
+  const ct=wordsToBytes(parts.slice(1+SALT_LEN+IV_LEN).join(" "));
+  return {salt,iv,ct};
+}
+
+$("panic").onclick=()=>{ $("pass").value=""; hardWipe(); setStatus("Tudo apagado.","ok"); resetTimer(); };
+$("wipeEnc").onclick=()=>{ $("plain").value=""; $("cipherWords").value=""; setStatus("Codificação apagada.","ok"); resetTimer(); };
+$("wipeDec").onclick=()=>{ $("cipherIn").value=""; $("plainOut").value=""; setStatus("Decodificação apagada.","ok"); resetTimer(); };
+
+$("encode").onclick=async()=>{
+  resetTimer(); setStatus("");
+  const pass=$("pass").value||"",plain=$("plain").value||"";
+  if(pass.trim().length<8) return setStatus("Passphrase curta. Use 4–6 palavras.","err");
+  if(!plain.trim()) return setStatus("Digite a mensagem real.","err");
+  try{ $("cipherWords").value=pack(await encrypt(plain,pass)); setStatus("Texto-casca gerado.","ok"); }
+  catch(e){ setStatus("Falha ao codificar: "+(e?.message||String(e)),"err"); }
+};
+
+$("decode").onclick=async()=>{
+  resetTimer(); setStatus("");
+  const pass=$("pass").value||"",cin=$("cipherIn").value||"";
+  if(pass.trim().length<8) return setStatus("Passphrase curta/vazia.","err");
+  if(!cin.trim()) return setStatus("Cole o texto-casca.","err");
+  try{ $("plainOut").value=await decrypt(unpack(cin),pass); setStatus("Decodificado.","ok"); }
+  catch(e){ $("plainOut").value=""; setStatus("Não decodificou (passphrase errada ou texto adulterado).","err"); }
+};
+
+$("copyEnc").onclick=async()=>{ resetTimer(); const t=$("cipherWords").value||""; if(!t.trim()) return setStatus("Nada para copiar.","err");
+  try{ await navigator.clipboard.writeText(t); setStatus("Texto-casca copiado.","ok"); }catch(_){ setStatus("Copie manualmente.","err"); }
+};
+$("copyPlain").onclick=async()=>{ resetTimer(); const t=$("plainOut").value||""; if(!t.trim()) return setStatus("Nada para copiar.","err");
+  try{ await navigator.clipboard.writeText(t); setStatus("Mensagem real copiada (apague logo).","ok"); }catch(_){ setStatus("Copie manualmente.","err"); }
+};
+
+showEnc(); resetTimer();
+})();
+</script>
+</body></html>
